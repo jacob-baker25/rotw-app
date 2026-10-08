@@ -30,6 +30,55 @@ function formatTime(value) {
   }).format(new Date(value));
 }
 
+function formatCountdown(milliseconds) {
+  const seconds = Math.max(0, Math.ceil(milliseconds / 1000));
+  const days = Math.floor(seconds / 86_400);
+  const hours = Math.floor((seconds % 86_400) / 3_600);
+  const minutes = Math.floor((seconds % 3_600) / 60);
+  const remainder = seconds % 60;
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${days ? `${days}d ` : ""}${pad(hours)}h ${pad(minutes)}m ${pad(remainder)}s`;
+}
+
+function VotingCountdown({ state, refresh }) {
+  const [tick, setTick] = useState(Date.now());
+  const target = Date.parse(
+    state.votingOpen ? state.votingEndsAt : state.votingStartsAt,
+  );
+  const serverTime = Date.parse(state.serverNow) + tick - state.receivedAt;
+  const remaining = Math.max(0, target - serverTime);
+
+  useEffect(() => {
+    const timer = setInterval(() => setTick(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  useEffect(() => {
+    const serverTimeNow = Date.parse(state.serverNow) + Date.now() - state.receivedAt;
+    const timer = setTimeout(refresh, Math.max(1000, target - serverTimeNow + 1000));
+    return () => clearTimeout(timer);
+  }, [target, state.serverNow, state.receivedAt, refresh]);
+
+  return (
+    <span
+      className="voting-countdown"
+      role="timer"
+      title={
+        state.votingOpen
+          ? "Voting closes Monday at 12:00 a.m. Eastern"
+          : "Voting opens Sunday at 12:00 a.m. Eastern"
+      }
+    >
+      {state.votingOpen ? "Voting ends in" : "Voting begins in"}
+      <strong>{formatCountdown(remaining)}</strong>
+      <small>ET</small>
+    </span>
+  );
+}
+
+function reasonHeading(post) {
+  return post?.source === "vote_reason" ? post.body : post?.title || "";
+}
+
 async function api(path, options = {}) {
   const response = await fetch(path, {
     ...options,
@@ -41,13 +90,7 @@ async function api(path, options = {}) {
   return data;
 }
 
-function CandidatePicker({
-  candidates,
-  value,
-  onChange,
-  id,
-  label = "Who is it about?",
-}) {
+function CandidatePicker({ candidates, value, onChange, id, label = "Name" }) {
   const known = candidates.some((person) => person.name === value);
   return (
     <div className="field">
@@ -75,7 +118,6 @@ function CandidatePicker({
         <input
           aria-label="Write-in name"
           maxLength={40}
-          placeholder="Their name"
           value={value === "__writein" ? "" : value}
           onChange={(event) => onChange(event.target.value || "__writein")}
         />
@@ -87,12 +129,9 @@ function CandidatePicker({
 function Identity({ roommates, identity, onChange }) {
   return (
     <div className="identity">
-      <span className="identity-icon" aria-hidden="true">
-        ✦
-      </span>
       <div>
         <strong>Who’s here?</strong>
-        <small>Pick your name to post and vote.</small>
+        <small>Select your name to post and vote.</small>
       </div>
       <select
         aria-label="Your name"
@@ -149,12 +188,7 @@ function Board({ state, identity, refresh, setNotice }) {
   return (
     <div className="two-column">
       <section className="panel compose-panel">
-        <div className="eyebrow">MAKE THE CASE</div>
-        <h2>Something worth remembering?</h2>
-        <p className="muted">
-          The kind thing, the funny moment, the clutch save. Put it on the board
-          while it’s fresh.
-        </p>
+        <h2>What did they do?</h2>
         <form onSubmit={submit} className="stack">
           <CandidatePicker
             candidates={state.candidates}
@@ -163,33 +197,30 @@ function Board({ state, identity, refresh, setNotice }) {
             id="post-person"
           />
           <div className="field">
-            <label htmlFor="post-title">Give it a headline</label>
+            <label htmlFor="post-title">Title</label>
             <input
               id="post-title"
               required
               minLength={2}
               maxLength={100}
-              placeholder="Saved dinner after a long day"
               value={title}
               onChange={(event) => setTitle(event.target.value)}
             />
           </div>
           <div className="field">
-            <label htmlFor="post-body">What happened?</label>
+            <label htmlFor="post-body">Details</label>
             <textarea
               id="post-body"
               required
               minLength={2}
               maxLength={1000}
               rows={5}
-              placeholder="Tell the story..."
               value={body}
               onChange={(event) => setBody(event.target.value)}
             />
           </div>
           <button className="button primary" disabled={busy || !identity}>
-            {busy ? "Posting…" : "Add to the board"}
-            <span aria-hidden="true">↗</span>
+            {busy ? "Posting…" : "Post"}
           </button>
           {!identity && (
             <small className="hint">
@@ -201,9 +232,8 @@ function Board({ state, identity, refresh, setNotice }) {
       <section className="board-column">
         <div className="section-heading">
           <div>
-            <div className="eyebrow">THIS WEEK</div>
             <h2>
-              The board <span className="count">{state.posts.length}</span>
+              This week <span className="count">{state.posts.length}</span>
             </h2>
           </div>
           <select
@@ -230,7 +260,7 @@ function Board({ state, identity, refresh, setNotice }) {
                   <time>{formatTime(post.created_at)}</time>
                 </div>
                 <h3>{post.title}</h3>
-                <p>{post.body}</p>
+                {post.body !== post.title && <p>{post.body}</p>}
                 <div className="post-foot">
                   Added by {post.author_name}
                   {post.source === "vote_reason" && (
@@ -242,11 +272,8 @@ function Board({ state, identity, refresh, setNotice }) {
           </div>
         ) : (
           <div className="empty">
-            <span aria-hidden="true">✳</span>
-            <h3>No stories here yet.</h3>
-            <p>
-              Start the week’s board with a moment someone deserves credit for.
-            </p>
+            <h3>No posts yet.</h3>
+            <p>Add the first post for this week.</p>
           </div>
         )}
       </section>
@@ -258,19 +285,49 @@ function Vote({ state, identity, refresh, setNotice }) {
   const personById = Object.fromEntries(
     state.candidates.map((person) => [person.id, person]),
   );
+  const testMode = !state.votingOpen && state.admin && state.testVotingReady;
+  const votingEnabled = state.votingOpen || testMode;
+  const savedVote = testMode ? state.testVote : state.myVote;
+  const visibleVotes = testMode ? state.testVotes || [] : state.weekVotes || [];
+  const postsById = Object.fromEntries(state.posts.map((post) => [post.id, post]));
+  const totals = Object.entries(
+    visibleVotes.reduce((counts, vote) => {
+      const name = testMode
+        ? vote.candidate_name
+        : personById[vote.candidate_id]?.name || "Unknown";
+      counts[name] = (counts[name] || 0) + 1;
+      return counts;
+    }, {}),
+  ).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
   const [candidate, setCandidate] = useState("");
   const [reasonId, setReasonId] = useState("");
   const [reasonText, setReasonText] = useState("");
+  const [isAnonymous, setIsAnonymous] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [ballotOpen, setBallotOpen] = useState(false);
+  useEffect(() => setBallotOpen(false), [identity, testMode]);
   useEffect(() => {
-    if (state.myVote) {
-      setCandidate(personById[state.myVote.candidate_id]?.name || "");
-      setReasonId(state.myVote.reason_post_id || "");
+    if (savedVote?.is_anonymous) {
+      setCandidate("");
+      setReasonId("");
+      setReasonText("");
+      setIsAnonymous(true);
+    } else if (savedVote) {
+      setCandidate(
+        testMode
+          ? savedVote.candidate_name
+          : personById[savedVote.candidate_id]?.name || "",
+      );
+      setReasonId(savedVote.reason_post_id || "");
+      setReasonText(testMode ? savedVote.reason_text || "" : "");
+      setIsAnonymous(savedVote.is_anonymous === true);
     } else {
       setCandidate("");
       setReasonId("");
+      setReasonText("");
+      setIsAnonymous(false);
     }
-  }, [state.myVote?.id, state.myVote?.updated_at, state.candidates.length]);
+  }, [identity, testMode, savedVote?.id, savedVote?.updated_at, savedVote?.is_anonymous, state.candidates.length]);
   const chosen = state.candidates.find(
     (person) => person.name.toLowerCase() === candidate.toLowerCase(),
   );
@@ -278,7 +335,7 @@ function Vote({ state, identity, refresh, setNotice }) {
     (post) => post.candidate_id === chosen?.id,
   );
   const currentReason = state.posts.find(
-    (post) => post.id === state.myVote?.reason_post_id,
+    (post) => post.id === savedVote?.reason_post_id,
   );
 
   async function submit(event) {
@@ -290,17 +347,39 @@ function Vote({ state, identity, refresh, setNotice }) {
       return setNotice("Choose a post or write your reason.");
     setBusy(true);
     try {
-      await api("/api/votes", {
+      await api(testMode ? "/api/admin/test-vote" : "/api/votes", {
         method: "POST",
         body: JSON.stringify({
           voter: identity,
           candidate,
           reasonPostId: reasonId || null,
           reasonText,
+          isAnonymous,
         }),
       });
-      setNotice("Your vote is in. You can change it until Sunday ends.");
+      setNotice(
+        testMode
+          ? "Test ballot saved. It does not count toward the weekly result."
+          : "Vote saved. You can change it until Sunday ends.",
+      );
       setReasonText("");
+      setBallotOpen(false);
+      await refresh();
+    } catch (error) {
+      setNotice(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function clearTest() {
+    setBusy(true);
+    try {
+      await api(`/api/admin/test-vote?voter=${encodeURIComponent(identity)}`, {
+        method: "DELETE",
+      });
+      setNotice("Test ballot cleared.");
+      setBallotOpen(false);
       await refresh();
     } catch (error) {
       setNotice(error.message);
@@ -310,135 +389,208 @@ function Vote({ state, identity, refresh, setNotice }) {
   }
 
   return (
-    <div className="vote-layout">
+    <div className={`vote-layout ${savedVote ? "has-voted" : ""}`}>
       <section className="panel vote-panel">
-        <div className="eyebrow">SUNDAY BALLOT</div>
-        <h2>Pick your roommate of the week.</h2>
-        {state.votingOpen ? (
+        <h2>{testMode ? "Test vote" : "Vote"}</h2>
+        {votingEnabled ? (
           <>
             <p className="muted">
-              One vote per roommate. Change your mind any time before midnight
-              Eastern.
+              {testMode
+                ? "Admin test votes are separate from Sunday's result."
+                : "One vote per person. You can change yours until midnight Eastern."}
             </p>
-            {state.myVote && (
+            {savedVote && (
               <div className="current-vote">
-                <strong>Your current vote</strong>
-                <span>
-                  {personById[state.myVote.candidate_id]?.name || "Write-in"} ·{" "}
-                  {currentReason?.title || "Reason saved"}
-                </span>
+                <strong>Your current {testMode ? "test vote" : "vote"}</strong>
+                {savedVote.is_anonymous ? (
+                  <span>Saved anonymously. Choose Change vote to enter a new pick.</span>
+                ) : (
+                  <span>
+                    {testMode
+                      ? savedVote.candidate_name
+                      : personById[savedVote.candidate_id]?.name ||
+                        "Write-in"}{" "}
+                    ·{" "}
+                    {reasonHeading(currentReason) ||
+                      savedVote.reason_text ||
+                      "Reason saved"}
+                  </span>
+                )}
               </div>
             )}
-            <form onSubmit={submit} className="stack">
-              <CandidatePicker
-                candidates={state.candidates}
-                value={candidate}
-                onChange={(value) => {
-                  setCandidate(value);
-                  setReasonId("");
-                }}
-                id="vote-person"
-                label="Your pick"
-              />
-              {candidate && candidate !== "__writein" && (
-                <div className="field">
-                  <label>What made the difference?</label>
-                  {reasons.length > 0 && (
-                    <div className="reason-list">
-                      {reasons.map((post) => (
-                        <label
-                          className={`reason-option ${reasonId === post.id ? "selected" : ""}`}
-                          key={post.id}
-                        >
-                          <input
-                            type="radio"
-                            name="reason"
-                            checked={reasonId === post.id}
-                            onChange={() => setReasonId(post.id)}
-                          />
-                          <span>
-                            <strong>{post.title}</strong>
-                            <small>{post.body}</small>
-                          </span>
-                        </label>
-                      ))}
-                    </div>
-                  )}
-                  <label
-                    className={`reason-option own-reason ${!reasonId ? "selected" : ""}`}
-                  >
-                    <input
-                      type="radio"
-                      name="reason"
-                      checked={!reasonId}
-                      onChange={() => setReasonId("")}
-                    />
-                    <span>
-                      <strong>Write my own reason</strong>
-                      <small>It will become a post others can choose.</small>
-                    </span>
-                  </label>
-                  {!reasonId && (
-                    <textarea
-                      aria-label="Your reason"
-                      maxLength={1000}
-                      rows={4}
-                      placeholder="What did they do?"
-                      value={reasonText}
-                      onChange={(event) => setReasonText(event.target.value)}
-                    />
-                  )}
-                </div>
-              )}
-              <button className="button primary" disabled={busy || !identity}>
-                {busy
-                  ? "Saving…"
-                  : state.myVote
-                    ? "Update my vote"
-                    : "Cast my vote"}
-                <span aria-hidden="true">↗</span>
+            <div className="ballot-actions">
+              <button
+                type="button"
+                className="button primary"
+                disabled={!identity || busy}
+                onClick={() => setBallotOpen((open) => !open)}
+                aria-expanded={ballotOpen}
+              >
+                {ballotOpen
+                  ? "Close ballot"
+                  : savedVote
+                    ? "Change vote"
+                    : "Vote"}
               </button>
-              {!identity && (
-                <small className="hint">Select your name above to vote.</small>
+              {testMode && savedVote && (
+                <button
+                  type="button"
+                  className="button subtle"
+                  disabled={busy}
+                  onClick={clearTest}
+                >
+                  Clear test vote
+                </button>
               )}
-            </form>
+            </div>
+            {!identity && (
+              <small className="hint">Select your name above to vote.</small>
+            )}
+            {ballotOpen && (
+              <form onSubmit={submit} className="stack ballot-form">
+                <CandidatePicker
+                  candidates={state.candidates}
+                  value={candidate}
+                  onChange={(value) => {
+                    setCandidate(value);
+                    setReasonId("");
+                    setReasonText("");
+                  }}
+                  id="vote-person"
+                  label="Your pick"
+                />
+                {candidate && candidate !== "__writein" && (
+                  <fieldset className="reason-fieldset">
+                    <legend>Reason:</legend>
+                    {reasons.length > 0 && (
+                      <div className="reason-list">
+                        {reasons.map((post) => (
+                          <label
+                            className={`reason-option ${reasonId === post.id ? "selected" : ""}`}
+                            key={post.id}
+                          >
+                            <input
+                              type="radio"
+                              name="reason"
+                              checked={reasonId === post.id}
+                              onChange={() => setReasonId(post.id)}
+                            />
+                            <strong>{reasonHeading(post)}</strong>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                    <label
+                      className={`reason-option own-reason ${!reasonId ? "selected" : ""}`}
+                    >
+                      <input
+                        type="radio"
+                        name="reason"
+                        checked={!reasonId}
+                        onChange={() => setReasonId("")}
+                      />
+                      <strong>Write my own reason</strong>
+                    </label>
+                    {!reasonId && (
+                      <>
+                        <p className="hint">Your reason becomes a post that others can select.</p>
+                        <textarea
+                          aria-label="Your reason"
+                          maxLength={1000}
+                          rows={3}
+                          value={reasonText}
+                          onChange={(event) => setReasonText(event.target.value)}
+                        />
+                      </>
+                    )}
+                  </fieldset>
+                )}
+                <div className="privacy-choice">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={isAnonymous}
+                      disabled={!state.anonymousReady}
+                      onChange={(event) => setIsAnonymous(event.target.checked)}
+                    />
+                    <span>Vote anonymously</span>
+                  </label>
+                  <small>
+                    {state.anonymousReady
+                      ? "Your name is hidden on the board and vote list. Admin can still see who voted."
+                      : "Run the updated Supabase schema to enable this option."}
+                  </small>
+                </div>
+                <button className="button primary" disabled={busy || !identity}>
+                  {busy ? "Saving…" : savedVote ? "Save change" : "Submit vote"}
+                </button>
+              </form>
+            )}
           </>
         ) : (
           <div className="vote-closed">
-            <span className="large-icon" aria-hidden="true">
-              ◷
-            </span>
             <h3>Voting opens Sunday.</h3>
             <p>
-              The board is open all week. Come back Sunday to cast or change
-              your vote before midnight Eastern.
+              {state.admin && !state.testVotingReady
+                ? "Run the updated supabase/schema.sql to enable weekday test ballots."
+                : "Voting opens Sunday and closes Monday at 12:00 a.m. Eastern. Admins can use a test ballot on weekdays."}
             </p>
           </div>
         )}
       </section>
-      <aside className="voting-aside">
-        <div className="eyebrow">HOW IT WORKS</div>
-        <h3>Good deeds have a paper trail now.</h3>
-        <ol>
-          <li>
-            <span>01</span>
-            <p>Add moments to the board through the week.</p>
-          </li>
-          <li>
-            <span>02</span>
-            <p>Vote on Sunday. Pick a post or write a reason.</p>
-          </li>
-          <li>
-            <span>03</span>
-            <p>
-              At midnight Eastern, votes lock and the winner joins the history.
+      <section className="panel vote-results">
+        <div className="section-heading">
+          <div>
+            <h2>{testMode ? "Test votes" : "Current votes"}</h2>
+            <p className="muted">
+              {testMode
+                ? "These ballots do not count toward the weekly result."
+                : `Week ending ${dateLabel(state.weekEnd)}`}
             </p>
-          </li>
-        </ol>
-        <div className="aside-note">
-          The vote count stays hidden until the week closes.
+          </div>
+          <span className="vote-count">
+            {visibleVotes.length} {visibleVotes.length === 1 ? "vote" : "votes"}
+          </span>
         </div>
-      </aside>
+        {visibleVotes.length ? (
+          <>
+            <div className="vote-totals" aria-label="Vote totals by person">
+              {totals.map(([name, count]) => (
+                <div className="vote-total" key={name}>
+                  <strong>{name}</strong>
+                  <span>{count}</span>
+                </div>
+              ))}
+            </div>
+            <div className="vote-records">
+              {visibleVotes.map((vote, index) => {
+                const post = postsById[vote.reason_post_id];
+                const name = testMode
+                  ? vote.candidate_name
+                  : personById[vote.candidate_id]?.name || "Unknown";
+                return (
+                  <article className="vote-record" key={vote.id || `${vote.updated_at}-${index}`}>
+                    <div className="vote-record-top">
+                      <strong>{vote.voter_name}</strong>
+                      <span>voted for {name}</span>
+                    </div>
+                    <div className="vote-record-reason">
+                      <strong>{reasonHeading(post) || vote.reason_text || "Reason unavailable"}</strong>
+                      {post && post.body !== reasonHeading(post) && (
+                        <p>{post.body}</p>
+                      )}
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          </>
+        ) : (
+          <div className="empty">
+            <h3>No votes yet.</h3>
+          </div>
+        )}
+      </section>
     </div>
   );
 }
@@ -486,8 +638,7 @@ function History({ state }) {
       <section>
         <div className="section-heading history-heading">
           <div>
-            <div className="eyebrow">THE RECORD BOOK</div>
-            <h2>Every week counts.</h2>
+            <h2>History</h2>
           </div>
           <select
             aria-label="Filter history by person"
@@ -509,9 +660,6 @@ function History({ state }) {
               key={`${item.type}-${item.date || "unknown"}-${item.slot || index}`}
             >
               <div className="history-date">
-                <span className="calendar-icon" aria-hidden="true">
-                  ✦
-                </span>
                 <span>
                   {item.date
                     ? `Week ending ${dateLabel(item.date)}`
@@ -553,9 +701,8 @@ function History({ state }) {
         </div>
       </section>
       <aside className="leaderboard panel">
-        <div className="eyebrow">ALL-TIME STANDINGS</div>
-        <h2>The leaderboard</h2>
-        <p className="muted">Each shared winner receives a full win.</p>
+        <h2>Leaderboard</h2>
+        <p className="muted">All-time wins</p>
         <div className="leader-list">
           {leaders.map((leader, index) => (
             <div className="leader-row" key={leader.id}>
@@ -631,12 +778,8 @@ function AdminPanel({ state, refresh, setNotice }) {
   if (!state.admin)
     return (
       <section className="panel admin-login">
-        <div className="eyebrow">HOUSE ADMIN</div>
-        <h2>Unlock the record book.</h2>
-        <p className="muted">
-          Edit posts, ballots, winners, and historical entries with your
-          passcode.
-        </p>
+        <h2>Admin</h2>
+        <p className="muted">Enter the admin passcode.</p>
         <form onSubmit={login} className="stack">
           <div className="field">
             <label htmlFor="passcode">Admin passcode</label>
@@ -660,11 +803,8 @@ function AdminPanel({ state, refresh, setNotice }) {
     <div className="admin-page">
       <div className="admin-header">
         <div>
-          <div className="eyebrow">HOUSE ADMIN</div>
-          <h2>Keep the record straight.</h2>
-          <p className="muted">
-            Changes here update the shared app for everyone.
-          </p>
+          <h2>Admin</h2>
+          <p className="muted">Manage posts, votes, winners, and names.</p>
         </div>
         <button className="button subtle" onClick={logout}>
           Lock admin
@@ -760,6 +900,7 @@ function AdminPanel({ state, refresh, setNotice }) {
                 title: post.title,
                 body: post.body,
                 week_end: post.week_end,
+                ...(state.anonymousReady ? { is_anonymous: post.is_anonymous } : {}),
               }}
               options={state.candidates}
               roommates={state.roommates}
@@ -787,6 +928,7 @@ function AdminPanel({ state, refresh, setNotice }) {
                 candidate_id: vote.candidate_id,
                 reason_post_id: vote.reason_post_id,
                 week_end: vote.week_end,
+                ...(state.anonymousReady ? { is_anonymous: vote.is_anonymous } : {}),
               }}
               options={state.candidates}
               roommates={state.roommates}
@@ -917,7 +1059,7 @@ function AdminPanel({ state, refresh, setNotice }) {
           {state.candidates.map((person) => (
             <EditableRecord
               key={person.id}
-              title={`${person.name}${person.is_roommate ? " · roommate" : " · write-in"}`}
+              title={`${person.name}${person.is_roommate ? "" : " · write-in"}`}
               fields={{ name: person.name }}
               kind="candidate"
               id={person.id}
@@ -961,7 +1103,7 @@ function EditableRecord({
       {editing && (
         <div className="edit-form">
           {Object.entries(draft).map(([key, value]) => (
-            <label key={key}>
+            <label key={key} className={key === "is_anonymous" ? "edit-checkbox" : ""}>
               <span>{key.replaceAll("_", " ")}</span>
               {key === "candidate_id" ? (
                 <select
@@ -1002,6 +1144,12 @@ function EditableRecord({
                       </option>
                     ))}
                 </select>
+              ) : key === "is_anonymous" ? (
+                <input
+                  type="checkbox"
+                  checked={value === true}
+                  onChange={(event) => change(key, event.target.checked)}
+                />
               ) : key === "body" ||
                 key === "reason_body" ||
                 key === "reason" ? (
@@ -1084,7 +1232,7 @@ export default function Home() {
       const next = await api(
         `/api/state?voter=${encodeURIComponent(identity)}`,
       );
-      setState(next);
+      setState({ ...next, receivedAt: Date.now() });
       setError("");
     } catch (cause) {
       setError(cause.message);
@@ -1114,10 +1262,7 @@ export default function Home() {
             onClick={() => setTab("board")}
             aria-label="ROTW home"
           >
-            <span className="brand-mark">✳</span>
-            <span>
-              ROTW<span className="brand-dot">.</span>
-            </span>
+            ROTW
           </button>
           <nav aria-label="Main navigation">
             <button
@@ -1150,42 +1295,20 @@ export default function Home() {
       <div className="shell">
         <section className="hero">
           <div className="hero-copy">
-            <div className="eyebrow">
-              <span className="tiny-star">✦</span> A HOUSE TRADITION, ALL WEEK
-              LONG
-            </div>
-            <h1>
-              Good roommates
-              <br />
-              <em>get remembered.</em>
-            </h1>
-            <p>
-              A home for the little moments that make someone roommate of the
-              week.
-            </p>
+            <div className="eyebrow">WEEKLY BOARD</div>
+            <h1>ROTW</h1>
             <div className="hero-meta">
               <span className="meta-badge">
                 WEEK ENDING {weekLabel.toUpperCase()}
               </span>
-              <span className="meta-status">
-                <span
-                  className={
-                    state?.votingOpen ? "status-dot green" : "status-dot"
-                  }
-                />
-                {state?.votingOpen ? "Voting is open" : "Stories are open"}
-              </span>
+              {state?.votingOpen && (
+                <span className="meta-status">
+                  <span className="status-dot green" />
+                  Voting open
+                </span>
+              )}
+              {state && <VotingCountdown state={state} refresh={refresh} />}
             </div>
-          </div>
-          <div className="hero-graphic" aria-hidden="true">
-            <div className="orbit orbit-one" />
-            <div className="orbit orbit-two" />
-            <span className="graphic-star">✳</span>
-            <span className="graphic-note">
-              THE LITTLE
-              <br />
-              THINGS ADD UP.
-            </span>
           </div>
         </section>
         {notice && (
@@ -1236,13 +1359,13 @@ export default function Home() {
             </div>
           </>
         ) : !error ? (
-          <div className="loading">Opening the house board…</div>
+          <div className="loading">Loading ROTW…</div>
         ) : null}
       </div>
       <footer className="site-footer">
         <div className="shell">
-          <span>ROTW ✳</span>
-          <span>Made for the house. Remember the good stuff.</span>
+          <span>ROTW</span>
+          <span>Weekly results</span>
         </div>
       </footer>
     </main>

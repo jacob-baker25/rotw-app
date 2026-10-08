@@ -16,8 +16,8 @@ const TABLES = {
 
 function allowedFields(kind, value) {
   const fields = {
-    post: ["week_end", "candidate_id", "author_name", "title", "body"],
-    vote: ["week_end", "voter_name", "candidate_id", "reason_post_id"],
+    post: ["week_end", "candidate_id", "author_name", "title", "body", "is_anonymous"],
+    vote: ["week_end", "voter_name", "candidate_id", "reason_post_id", "is_anonymous"],
     legacy: ["candidate_id", "week_end", "reason"],
     winner: [
       "week_end",
@@ -35,6 +35,12 @@ function allowedFields(kind, value) {
 
 function validate(kind, value) {
   if (
+    (kind === "post" || kind === "vote") &&
+    value.is_anonymous !== undefined &&
+    typeof value.is_anonymous !== "boolean"
+  )
+    return "Anonymous setting must be checked or unchecked.";
+  if (
     kind === "candidate" &&
     value.name !== undefined &&
     !validName(value.name)
@@ -45,7 +51,7 @@ function validate(kind, value) {
       value.author_name !== undefined &&
       !ROOMMATES.includes(value.author_name)
     )
-      return "Choose a roommate as author.";
+      return "Choose one of the six names as author.";
     if (
       value.title !== undefined &&
       (typeof value.title !== "string" ||
@@ -66,7 +72,7 @@ function validate(kind, value) {
     value.voter_name !== undefined &&
     !ROOMMATES.includes(value.voter_name)
   )
-    return "Choose a roommate as voter.";
+    return "Choose one of the six names as voter.";
   if (
     kind === "winner" &&
     value.vote_count !== undefined &&

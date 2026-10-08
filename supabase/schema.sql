@@ -1,4 +1,4 @@
--- Run this entire file once in a new Supabase project's SQL Editor.
+-- Run this entire file in Supabase SQL Editor; safe to rerun for updates.
 create extension if not exists pgcrypto;
 
 create table if not exists public.candidates (
@@ -17,8 +17,10 @@ create table if not exists public.posts (
   title text not null check (length(trim(title)) between 2 and 100),
   body text not null check (length(trim(body)) between 2 and 1000),
   source text not null default 'board' check (source in ('board', 'vote_reason')),
+  is_anonymous boolean not null default false,
   created_at timestamptz not null default now()
 );
+alter table public.posts add column if not exists is_anonymous boolean not null default false;
 create index if not exists posts_week_idx on public.posts (week_end, created_at desc);
 
 create table if not exists public.votes (
@@ -27,11 +29,26 @@ create table if not exists public.votes (
   voter_name text not null check (voter_name in ('Jacob', 'Will', 'Brandon', 'Cole', 'Tommy', 'Xan')),
   candidate_id uuid not null references public.candidates(id),
   reason_post_id uuid not null references public.posts(id),
+  is_anonymous boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (week_end, voter_name)
 );
+alter table public.votes add column if not exists is_anonymous boolean not null default false;
 create index if not exists votes_week_idx on public.votes (week_end);
+
+-- Admin-only weekday ballot testing. These rows are never counted as votes.
+create table if not exists public.test_votes (
+  voter_name text primary key check (voter_name in ('Jacob', 'Will', 'Brandon', 'Cole', 'Tommy', 'Xan')),
+  week_end date not null,
+  candidate_name text not null check (length(trim(candidate_name)) between 2 and 40),
+  reason_post_id uuid references public.posts(id) on delete cascade,
+  reason_text text,
+  is_anonymous boolean not null default false,
+  updated_at timestamptz not null default now(),
+  check ((reason_post_id is not null) <> (reason_text is not null))
+);
+alter table public.test_votes add column if not exists is_anonymous boolean not null default false;
 
 create table if not exists public.weekly_closures (
   week_end date primary key,
@@ -61,10 +78,33 @@ create table if not exists public.legacy_wins (
 alter table public.candidates enable row level security;
 alter table public.posts enable row level security;
 alter table public.votes enable row level security;
+alter table public.test_votes enable row level security;
 alter table public.weekly_closures enable row level security;
 alter table public.weekly_winners enable row level security;
 alter table public.legacy_wins enable row level security;
 -- No browser-facing policies: the server uses a Supabase secret key only.
+
+-- New Supabase projects may not grant Data API privileges automatically.
+-- The server's secret key acts as service_role. No browser role needs table access.
+grant usage on schema public to service_role;
+grant select, insert, update, delete on
+  public.candidates,
+  public.posts,
+  public.votes,
+  public.test_votes,
+  public.weekly_closures,
+  public.weekly_winners,
+  public.legacy_wins
+to service_role;
+revoke all on
+  public.candidates,
+  public.posts,
+  public.votes,
+  public.test_votes,
+  public.weekly_closures,
+  public.weekly_winners,
+  public.legacy_wins
+from anon, authenticated;
 
 create or replace function public.rotw_week_end(at_time timestamptz)
 returns date language sql stable as $$
@@ -86,7 +126,7 @@ declare
   current_week date;
 begin
   if p_author not in ('Jacob','Will','Brandon','Cole','Tommy','Xan') then
-    raise exception 'Choose one of the six roommates as the author.';
+    raise exception 'Choose one of the six names as the author.';
   end if;
   if length(trim(coalesce(p_candidate_name,''))) not between 2 and 40
      or length(trim(coalesce(p_title,''))) not between 2 and 100
@@ -116,7 +156,7 @@ declare
   result public.votes;
 begin
   if p_voter not in ('Jacob','Will','Brandon','Cole','Tommy','Xan') then
-    raise exception 'Choose your roommate name before voting.';
+    raise exception 'Choose your name before voting.';
   end if;
   if length(trim(coalesce(p_candidate_name,''))) not between 2 and 40 then
     raise exception 'Choose or enter a candidate name.';
@@ -150,6 +190,160 @@ begin
   on conflict (week_end,voter_name) do update
     set candidate_id=excluded.candidate_id,
         reason_post_id=excluded.reason_post_id,
+        updated_at=now()
+  returning * into result;
+  return result;
+end;
+$$;
+
+create or replace function public.submit_rotw_test_vote(
+  p_voter text, p_candidate_name text, p_reason_post_id uuid default null, p_reason_text text default null
+) returns public.test_votes
+language plpgsql security definer set search_path = public, pg_temp as $$
+declare
+  current_week date;
+  result public.test_votes;
+begin
+  if p_voter not in ('Jacob','Will','Brandon','Cole','Tommy','Xan') then
+    raise exception 'Choose your name before submitting a test ballot.';
+  end if;
+  if length(trim(coalesce(p_candidate_name,''))) not between 2 and 40 then
+    raise exception 'Choose or enter a candidate name.';
+  end if;
+  current_week := public.rotw_week_end(clock_timestamp());
+  if p_reason_post_id is not null then
+    if not exists (
+      select 1 from public.posts p
+      join public.candidates c on c.id=p.candidate_id
+      where p.id=p_reason_post_id and p.week_end=current_week
+        and c.name_key=lower(trim(p_candidate_name))
+    ) then
+      raise exception 'Choose a post from this week for that candidate.';
+    end if;
+  elsif length(trim(coalesce(p_reason_text,''))) not between 2 and 1000 then
+    raise exception 'Choose a post or write a reason.';
+  end if;
+  insert into public.test_votes(voter_name,week_end,candidate_name,reason_post_id,reason_text)
+  values (p_voter,current_week,trim(p_candidate_name),p_reason_post_id,
+    case when p_reason_post_id is null then trim(p_reason_text) else null end)
+  on conflict (voter_name) do update
+    set week_end=excluded.week_end,
+        candidate_name=excluded.candidate_name,
+        reason_post_id=excluded.reason_post_id,
+        reason_text=excluded.reason_text,
+        updated_at=now()
+  returning * into result;
+  return result;
+end;
+$$;
+
+-- Versioned ballot functions preserve the earlier API while adding anonymous display.
+create or replace function public.submit_rotw_vote_v2(
+  p_voter text, p_candidate_name text, p_reason_post_id uuid default null,
+  p_reason_text text default null, p_is_anonymous boolean default false
+) returns public.votes
+language plpgsql security definer set search_path = public, pg_temp as $$
+declare
+  target_candidate_id uuid;
+  selected_post uuid;
+  current_week date;
+  result public.votes;
+begin
+  if p_voter not in ('Jacob','Will','Brandon','Cole','Tommy','Xan') then
+    raise exception 'Choose your name before voting.';
+  end if;
+  if length(trim(coalesce(p_candidate_name,''))) not between 2 and 40 then
+    raise exception 'Choose or enter a candidate name.';
+  end if;
+  current_week := public.rotw_week_end(clock_timestamp());
+  perform pg_advisory_xact_lock(hashtext('rotw:' || current_week::text));
+  if extract(dow from clock_timestamp() at time zone 'America/New_York') <> 0
+     or clock_timestamp() >= public.rotw_closes_at(current_week)
+     or exists (select 1 from public.weekly_closures where week_end=current_week) then
+    raise exception 'Voting is open only on Sunday before midnight Eastern.';
+  end if;
+  insert into public.candidates(name)
+  values (trim(p_candidate_name))
+  on conflict (name_key) do update set name = candidates.name
+  returning id into target_candidate_id;
+  if p_reason_post_id is not null then
+    select id into selected_post from public.posts
+    where id=p_reason_post_id and week_end=current_week and candidate_id=target_candidate_id;
+    if selected_post is null then
+      raise exception 'Choose a reason posted this week for that candidate.';
+    end if;
+    if coalesce(p_is_anonymous,false) then
+      update public.posts set is_anonymous=true
+      where id=selected_post and author_name=p_voter;
+    end if;
+  elsif length(trim(coalesce(p_reason_text,''))) between 2 and 1000 then
+    insert into public.posts(week_end,candidate_id,author_name,title,body,source,is_anonymous)
+    values (current_week,target_candidate_id,p_voter,left(trim(p_reason_text),100),
+      trim(p_reason_text),'vote_reason',coalesce(p_is_anonymous,false))
+    returning id into selected_post;
+  else
+    raise exception 'Choose a post or write a reason for your vote.';
+  end if;
+  insert into public.votes(week_end,voter_name,candidate_id,reason_post_id,is_anonymous)
+  values (current_week,p_voter,target_candidate_id,selected_post,coalesce(p_is_anonymous,false))
+  on conflict (week_end,voter_name) do update
+    set candidate_id=excluded.candidate_id,
+        reason_post_id=excluded.reason_post_id,
+        is_anonymous=excluded.is_anonymous,
+        updated_at=now()
+  returning * into result;
+  return result;
+end;
+$$;
+
+create or replace function public.submit_rotw_test_vote_v2(
+  p_voter text, p_candidate_name text, p_reason_post_id uuid default null,
+  p_reason_text text default null, p_is_anonymous boolean default false
+) returns public.test_votes
+language plpgsql security definer set search_path = public, pg_temp as $$
+declare
+  target_candidate_id uuid;
+  selected_post uuid;
+  current_week date;
+  result public.test_votes;
+begin
+  if p_voter not in ('Jacob','Will','Brandon','Cole','Tommy','Xan') then
+    raise exception 'Choose your name before submitting a test ballot.';
+  end if;
+  if length(trim(coalesce(p_candidate_name,''))) not between 2 and 40 then
+    raise exception 'Choose or enter a candidate name.';
+  end if;
+  current_week := public.rotw_week_end(clock_timestamp());
+  insert into public.candidates(name)
+  values (trim(p_candidate_name))
+  on conflict (name_key) do update set name = candidates.name
+  returning id into target_candidate_id;
+  if p_reason_post_id is not null then
+    select id into selected_post from public.posts
+    where id=p_reason_post_id and week_end=current_week and candidate_id=target_candidate_id;
+    if selected_post is null then
+      raise exception 'Choose a post from this week for that candidate.';
+    end if;
+    if coalesce(p_is_anonymous,false) then
+      update public.posts set is_anonymous=true
+      where id=selected_post and author_name=p_voter;
+    end if;
+  elsif length(trim(coalesce(p_reason_text,''))) between 2 and 1000 then
+    insert into public.posts(week_end,candidate_id,author_name,title,body,source,is_anonymous)
+    values (current_week,target_candidate_id,p_voter,left(trim(p_reason_text),100),
+      trim(p_reason_text),'vote_reason',coalesce(p_is_anonymous,false))
+    returning id into selected_post;
+  else
+    raise exception 'Choose a post or write a reason.';
+  end if;
+  insert into public.test_votes(voter_name,week_end,candidate_name,reason_post_id,reason_text,is_anonymous)
+  values (p_voter,current_week,trim(p_candidate_name),selected_post,null,coalesce(p_is_anonymous,false))
+  on conflict (voter_name) do update
+    set week_end=excluded.week_end,
+        candidate_name=excluded.candidate_name,
+        reason_post_id=excluded.reason_post_id,
+        reason_text=null,
+        is_anonymous=excluded.is_anonymous,
         updated_at=now()
   returning * into result;
   return result;
@@ -208,10 +402,16 @@ $$;
 
 revoke all on function public.create_rotw_post(text,text,text,text) from public, anon, authenticated;
 revoke all on function public.submit_rotw_vote(text,text,uuid,text) from public, anon, authenticated;
+revoke all on function public.submit_rotw_test_vote(text,text,uuid,text) from public, anon, authenticated;
+revoke all on function public.submit_rotw_vote_v2(text,text,uuid,text,boolean) from public, anon, authenticated;
+revoke all on function public.submit_rotw_test_vote_v2(text,text,uuid,text,boolean) from public, anon, authenticated;
 revoke all on function public.finalize_rotw_week(date) from public, anon, authenticated;
 revoke all on function public.finalize_rotw_due() from public, anon, authenticated;
 grant execute on function public.create_rotw_post(text,text,text,text) to service_role;
 grant execute on function public.submit_rotw_vote(text,text,uuid,text) to service_role;
+grant execute on function public.submit_rotw_test_vote(text,text,uuid,text) to service_role;
+grant execute on function public.submit_rotw_vote_v2(text,text,uuid,text,boolean) to service_role;
+grant execute on function public.submit_rotw_test_vote_v2(text,text,uuid,text,boolean) to service_role;
 grant execute on function public.finalize_rotw_week(date) to service_role;
 grant execute on function public.finalize_rotw_due() to service_role;
 

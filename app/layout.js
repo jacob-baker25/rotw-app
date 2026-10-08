@@ -1,8 +1,8 @@
 import "./globals.css";
 
 export const metadata = {
-  title: "ROTW — Roommate of the Week",
-  description: "The little things deserve to be remembered.",
+  title: "ROTW",
+  description: "Weekly posts, voting, and results.",
 };
 
 export default function RootLayout({ children }) {

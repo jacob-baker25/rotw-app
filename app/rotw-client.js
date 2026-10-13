@@ -606,7 +606,12 @@ function History({ state }) {
   const leaders = [...counts.entries()]
     .map(([id, wins]) => ({ id, name: people[id]?.name || "Unknown", wins }))
     .sort((a, b) => b.wins - a.wins || a.name.localeCompare(b.name));
-  const grouped = new Map();
+  const grouped = new Map(
+    state.closures.map((closure) => [
+      `week-${closure.week_end}`,
+      { date: closure.week_end, wins: [], type: "weekly" },
+    ]),
+  );
   for (const win of state.winners) {
     const key = `week-${win.week_end}`;
     if (!grouped.has(key))
@@ -668,6 +673,11 @@ function History({ state }) {
                 {item.wins.length > 1 && <em>Shared win</em>}
               </div>
               <div className="history-winners">
+                {item.type === "weekly" && item.wins.length === 0 && (
+                  <div className="history-winner">
+                    <h3>No winner</h3>
+                  </div>
+                )}
                 {item.wins.map((win) => (
                   <div className="history-winner" key={win.id}>
                     <h3>{people[win.candidate_id]?.name || "Unknown"}</h3>
@@ -680,6 +690,11 @@ function History({ state }) {
                   </div>
                 ))}
               </div>
+              {item.type === "weekly" && item.wins.length === 0 && (
+                <div className="history-reason">
+                  <p>No candidate received 3 votes.</p>
+                </div>
+              )}
               {item.wins.map((win) => (
                 <div className="history-reason" key={`reason-${win.id}`}>
                   {item.type === "weekly" ? (
@@ -728,7 +743,7 @@ function AdminPanel({ state, refresh, setNotice }) {
   const [newLegacyReason, setNewLegacyReason] = useState("");
   const [newWinnerWeek, setNewWinnerWeek] = useState("");
   const [newWinnerCandidate, setNewWinnerCandidate] = useState("");
-  const [newWinnerVotes, setNewWinnerVotes] = useState(1);
+  const [newWinnerVotes, setNewWinnerVotes] = useState(3);
   const [busy, setBusy] = useState(false);
   const names = Object.fromEntries(
     state.candidates.map((person) => [person.id, person.name]),
@@ -945,7 +960,7 @@ function AdminPanel({ state, refresh, setNotice }) {
         <h3>Finalized winners</h3>
         <p className="muted">
           Correct the winner, vote count, or featured reason here. To add a
-          shared winner, choose a closed week.
+          shared winner, choose a closed week. A winner needs at least 3 votes.
         </p>
         <form
           className="admin-create"
@@ -994,7 +1009,7 @@ function AdminPanel({ state, refresh, setNotice }) {
           <input
             aria-label="Vote count"
             type="number"
-            min="1"
+            min="3"
             value={newWinnerVotes}
             onChange={(event) => setNewWinnerVotes(event.target.value)}
           />

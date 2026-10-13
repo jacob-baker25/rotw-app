@@ -78,12 +78,12 @@ from public.candidates where name='Tommy';
 
 insert into public.votes(week_end,voter_name,candidate_id,reason_post_id)
 select date '2026-09-06',v.voter,c.id,p.id
-from (values ('Jacob'),('Brandon')) v(voter)
+from (values ('Jacob'),('Brandon'),('Will')) v(voter)
 join public.candidates c on c.name='Will'
 join public.posts p on p.title='Will reason';
 insert into public.votes(week_end,voter_name,candidate_id,reason_post_id)
 select date '2026-09-06',v.voter,c.id,p.id
-from (values ('Cole'),('Xan')) v(voter)
+from (values ('Cole'),('Xan'),('Tommy')) v(voter)
 join public.candidates c on c.name='Tommy'
 join public.posts p on p.title='Tommy reason';
 
@@ -93,8 +93,27 @@ begin
   if (select count(*) from public.weekly_winners where week_end=date '2026-09-06') <> 2 then
     raise exception 'A tied week should save two winners';
   end if;
-  if exists (select 1 from public.weekly_winners where week_end=date '2026-09-06' and (vote_count<>2 or reason_body is null)) then
+  if exists (select 1 from public.weekly_winners where week_end=date '2026-09-06' and (vote_count<>3 or reason_body is null)) then
     raise exception 'Winner count or reason snapshot incorrect';
+  end if;
+end;
+$$;
+
+insert into public.posts(week_end,candidate_id,author_name,title,body)
+select date '2026-08-30',id,'Jacob','Xan reason','A good thing Xan did'
+from public.candidates where name='Xan';
+insert into public.votes(week_end,voter_name,candidate_id,reason_post_id)
+select date '2026-08-30',v.voter,c.id,p.id
+from (values ('Jacob'),('Brandon')) v(voter)
+join public.candidates c on c.name='Xan'
+join public.posts p on p.title='Xan reason';
+
+select public.finalize_rotw_week(date '2026-08-30');
+do $$
+begin
+  if not exists (select 1 from public.weekly_closures where week_end=date '2026-08-30')
+     or exists (select 1 from public.weekly_winners where week_end=date '2026-08-30') then
+    raise exception 'A week with only two votes must close without a winner';
   end if;
 end;
 $$;

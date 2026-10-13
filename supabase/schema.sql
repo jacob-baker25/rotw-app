@@ -366,7 +366,9 @@ begin
     select candidate_id, count(*)::integer as vote_count
     from public.votes where week_end=p_week_end group by candidate_id
   ), leaders as (
-    select * from counts where vote_count = (select max(vote_count) from counts)
+    select * from counts
+    where vote_count >= 3
+      and vote_count = (select max(vote_count) from counts)
   )
   select p_week_end,l.candidate_id,l.vote_count,reason.id,reason.title,reason.body
   from leaders l

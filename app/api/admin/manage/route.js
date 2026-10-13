@@ -76,9 +76,9 @@ function validate(kind, value) {
   if (
     kind === "winner" &&
     value.vote_count !== undefined &&
-    (!Number.isInteger(value.vote_count) || value.vote_count < 1)
+    (!Number.isInteger(value.vote_count) || value.vote_count < 3)
   )
-    return "Win votes must be at least 1.";
+    return "A winner needs at least 3 votes.";
   if (
     kind === "legacy" &&
     value.reason !== null &&

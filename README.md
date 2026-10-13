@@ -9,7 +9,7 @@ A weekly board for posts, Sunday voting, and winner history. Built with Next.js,
 - The header counts down to voting opening at Sunday 12:00 a.m. Eastern, then to closing at Monday 12:00 a.m. Eastern.
 - Each ballot chooses a post about that person or includes a new written reason. Written reasons become posts that later voters can choose.
 - A ballot can be shown anonymously in the vote list. A reason written with that ballot is anonymous on the board too. The selected name is still stored to enforce one vote per person and is visible in Admin.
-- The Vote page shows current vote totals and each ballot's reason. At the deadline, the top vote getter wins. Tied leaders each receive one full win.
+- The Vote page shows current vote totals and each ballot's reason. At the deadline, the top vote getter wins only if they received at least 3 votes. A week with no candidate at 3 votes is recorded as **No winner**. Tied leaders at 3 or more each receive one full win.
 - The most selected post among the winner's ballots is saved as the featured reason.
 - History starts with the 20 wins you supplied: Will 12, Tommy 5, Sarah 1, Xan 1, Brandon 1. Xan is dated September 13, Will September 20, and Brandon September 27, 2026. The other dates and reasons are blank.
 - A passcode-protected Admin area can correct posts, ballots, candidate names, past wins, and finalized winner entries.
